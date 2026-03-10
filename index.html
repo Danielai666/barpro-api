@@ -1226,7 +1226,7 @@ tr:hover td { background: rgba(255,255,255,0.015); }
           </div>
           <div class="panel-body">
             <div class="scanner-area" id="scanner-area">
-              <video id="scanner-video" autoplay playsinline muted></video>
+              <div id="qr-reader" style="width:100%;display:none;"></div>
               <div class="scanner-hint" id="scanner-hint">Tap "Scan Barcode" to use camera, or search below</div>
               <div class="sku-found" id="sku-found"></div>
             </div>
@@ -1419,6 +1419,8 @@ tr:hover td { background: rgba(255,255,255,0.015); }
 
 <!-- Supabase -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<!-- html5-qrcode — works on Safari/iPhone -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <script>
 'use strict';
@@ -2081,8 +2083,10 @@ async function submitEvent() {
 }
 
 // ══════════════════════════════════════════════════════
-// BARCODE SCANNER
+// BARCODE SCANNER (html5-qrcode — works on Safari/iPhone)
 // ══════════════════════════════════════════════════════
+let QR_SCANNER = null;
+
 async function toggleScanner() {
   if (SESSION.scannerActive) { stopScanner(); return; }
   await startScanner();
@@ -2090,62 +2094,54 @@ async function toggleScanner() {
 
 async function startScanner() {
   const area = document.getElementById('scanner-area');
-  const video = document.getElementById('scanner-video');
   const hint = document.getElementById('scanner-hint');
-  const btn = document.getElementById('scan-btn');
-
-  // Check BarcodeDetector support
-  if (!('BarcodeDetector' in window)) {
-    toast('Barcode scanning not supported in this browser. Try Chrome on Android.', 't-info');
-    return;
-  }
+  const btn  = document.getElementById('scan-btn');
+  const qrDiv = document.getElementById('qr-reader');
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    SESSION.scannerStream = stream;
+    QR_SCANNER = new Html5Qrcode('qr-reader');
     SESSION.scannerActive = true;
-    video.srcObject = stream;
-    video.style.display = 'block';
+    qrDiv.style.display = 'block';
+    hint.style.display = 'none';
     area.classList.add('scanning');
-    hint.textContent = '🔍 Scanning for barcode…';
     btn.textContent = '⏹ Stop Scanner';
 
-    const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'] });
-
-    SESSION.scannerInterval = setInterval(async () => {
-      if (!SESSION.scannerActive) return;
-      try {
-        const barcodes = await detector.detect(video);
-        if (barcodes.length > 0) {
-          const code = barcodes[0].rawValue;
-          stopScanner();
-          handleScannedCode(code);
-        }
-      } catch {}
-    }, 300);
-
+    await QR_SCANNER.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      (decodedText) => {
+        stopScanner();
+        handleScannedCode(decodedText);
+      },
+      () => {} // ignore errors during scan
+    );
   } catch (e) {
-    toast('Camera error: ' + e.message, 't-err');
+    SESSION.scannerActive = false;
+    qrDiv.style.display = 'none';
+    hint.style.display = 'block';
+    area.classList.remove('scanning');
+    btn.textContent = '📷 Scan Barcode';
+    toast('Camera error: ' + e, 't-err');
   }
 }
 
 function stopScanner() {
-  clearInterval(SESSION.scannerInterval);
-  if (SESSION.scannerStream) {
-    SESSION.scannerStream.getTracks().forEach(t => t.stop());
-    SESSION.scannerStream = null;
+  if (QR_SCANNER) {
+    QR_SCANNER.stop().catch(() => {});
+    QR_SCANNER.clear();
+    QR_SCANNER = null;
   }
   SESSION.scannerActive = false;
 
-  const video = document.getElementById('scanner-video');
-  const area = document.getElementById('scanner-area');
-  const hint = document.getElementById('scanner-hint');
-  const btn = document.getElementById('scan-btn');
+  const area  = document.getElementById('scanner-area');
+  const hint  = document.getElementById('scanner-hint');
+  const btn   = document.getElementById('scan-btn');
+  const qrDiv = document.getElementById('qr-reader');
 
-  if (video) { video.style.display = 'none'; video.srcObject = null; }
-  if (area) area.classList.remove('scanning');
-  if (hint) hint.textContent = 'Tap "Scan Barcode" to use camera, or search below';
-  if (btn) btn.textContent = '📷 Scan Barcode';
+  if (qrDiv)  { qrDiv.style.display = 'none'; qrDiv.innerHTML = ''; }
+  if (hint)   { hint.style.display = 'block'; hint.textContent = 'Tap "Scan Barcode" to use camera, or search below'; }
+  if (area)   area.classList.remove('scanning');
+  if (btn)    btn.textContent = '📷 Scan Barcode';
 }
 
 function handleScannedCode(code) {
